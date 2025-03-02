@@ -1,49 +1,4 @@
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const app = express();
-
-// Add JSON body parser middleware
-app.use(express.json());
-
-// Handle unhandled promise rejections globally
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Promise Rejection:');
-  console.error(reason);
-});
-
-// Add a timeout to all axios requests
-axios.defaults.timeout = 10000; // 10 seconds
-
-// Calendly API token - make sure this is set in Railway environment variables
-const CALENDLY_API_TOKEN = process.env.CALENDLY_API_TOKEN;
-// Your Calendly User URI - you'll need to set this in Railway environment variables as well
-const CALENDLY_USER_URI = process.env.CALENDLY_USER_URI;
-
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({
-    status: 'success',
-    message: 'Calendly API integration is up and running!'
-  });
-});
-
-// Simple test endpoint
-app.get('/test', (req, res) => {
-  // Return a simple response
-  res.json({
-    status: 'success',
-    message: 'Test endpoint is working',
-    env: {
-      hasToken: !!CALENDLY_API_TOKEN,
-      hasUserUri: !!CALENDLY_USER_URI,
-      tokenLength: CALENDLY_API_TOKEN ? CALENDLY_API_TOKEN.length : 0,
-      timestamp: new Date().toISOString()
-    }
-  });
-});
-
-// Check availability endpoint
+// Replace your current check-availability endpoint with this one
 app.get('/check-availability', async (req, res) => {
   try {
     // Get the min_start_time from query parameters
@@ -56,68 +11,123 @@ app.get('/check-availability', async (req, res) => {
       });
     }
 
-    // Simple mocked response for now to see if endpoint works
-    return res.json({
-      status: 'success',
-      isAvailable: true,
-      requestedTime: minStartTime,
-      message: "Simplified response to test API endpoint",
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('Error in check-availability:', error);
-    return res.status(500).json({
-      status: 'error',
-      message: 'An error occurred',
-      error: error.message
-    });
-  }
-});
+    console.log(`Checking availability for time: ${minStartTime}`);
+    
+    // Check if necessary environment variables are set
+    if (!CALENDLY_API_TOKEN) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Calendly API token is not configured'
+      });
+    }
 
-// Endpoint to get your Calendly user URI
-app.get('/get-user-uri', async (req, res) => {
-  try {
-    const response = await axios.get('https://api.calendly.com/users/me', {
+    if (!CALENDLY_USER_URI) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Calendly User URI is not configured'
+      });
+    }
+
+    // Calculate end time (7 days from start time)
+    const startDate = new Date(minStartTime);
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 7);
+    const maxEndTime = endDate.toISOString();
+
+    // Get user availability from Calendly
+    console.log(`Requesting availability from ${minStartTime} to ${maxEndTime}`);
+    const availabilityResponse = await axios.get('https://api.calendly.com/user_availability', {
       headers: {
         'Authorization': `Bearer ${CALENDLY_API_TOKEN}`,
         'Content-Type': 'application/json'
+      },
+      params: {
+        'user': CALENDLY_USER_URI,
+        'start_time': minStartTime,
+        'end_time': maxEndTime
       }
     });
 
-    res.json({
-      status: 'success',
-      userUri: response.data.resource.uri,
-      userData: response.data.resource
-    });
-  } catch (error) {
-    console.error('Error getting user URI:', error.response ? error.response.data : error.message);
+    console.log('Retrieved user availability data');
+
+    // Check if the specific time is available
+    const requestedDate = new Date(minStartTime);
+    const requestHour = requestedDate.getUTCHours();
+    const requestMinute = requestedDate.getUTCMinutes();
+    const requestDay = requestedDate.toISOString().split('T')[0]; // Get YYYY-MM-DD
     
-    return res.status(error.response ? error.response.status : 500).json({
-      status: 'error',
-      message: error.response ? error.response.data : 'An error occurred while getting user URI',
-      details: error.message
+    // Initialize variables
+    let isAvailable = false;
+    let availableTimes = [];
+    
+    // Process availability data from Calendly
+    if (availabilityResponse.data && 
+        availabilityResponse.data.resource) {
+      
+      // Calendly v2 API might return the data in different formats depending on the account type
+      // Let's handle both array and direct object formats
+      if (availabilityResponse.data.resource.available_times) {
+        // Direct available_times array
+        availableTimes = availabilityResponse.data.resource.available_times;
+      } else if (availabilityResponse.data.resource.availability_intervals) {
+        // Array of availability intervals
+        availabilityResponse.data.resource.availability_intervals.forEach(interval => {
+          // Convert intervals to discrete times (e.g., every 30 minutes)
+          const start = new Date(interval.start_time);
+          const end = new Date(interval.end_time);
+          
+          // Create 30-minute slots
+          while (start < end) {
+            availableTimes.push(new Date(start).toISOString());
+            start.setMinutes(start.getMinutes() + 30);
+          }
+        });
+      } else if (availabilityResponse.data.resource.availability_schedules) {
+        // Schedules with available_times
+        availabilityResponse.data.resource.availability_schedules.forEach(schedule => {
+          if (schedule.available_times) {
+            availableTimes = [...availableTimes, ...schedule.available_times];
+          }
+        });
+      }
+      
+      // Check if requested time matches an available time
+      isAvailable = availableTimes.some(timeSlot => {
+        const slotDate = new Date(timeSlot);
+        return slotDate.toISOString().split('T')[0] === requestDay && 
+               slotDate.getUTCHours() === requestHour && 
+               slotDate.getUTCMinutes() === requestMinute;
+      });
+    }
+
+    // Return the response
+    return res.json({
+      status: 'success',
+      isAvailable: isAvailable,
+      requestedTime: minStartTime,
+      availableTimes: availableTimes.slice(0, 10) // Limit to first 10 available times
     });
+
+  } catch (error) {
+    console.error('Error checking availability:');
+    
+    if (error.response) {
+      console.error('Response data:', JSON.stringify(error.response.data, null, 2));
+      console.error('Status code:', error.response.status);
+      
+      return res.status(error.response.status).json({
+        status: 'error',
+        message: error.response.data,
+        details: `Request failed with status code ${error.response.status}`
+      });
+    } else {
+      console.error('Error message:', error.message);
+      
+      return res.status(500).json({
+        status: 'error',
+        message: 'An error occurred while checking availability',
+        details: error.message
+      });
+    }
   }
-});
-
-// Debug endpoint to check API token (remove in production)
-app.get('/debug-token', (req, res) => {
-  // Show first and last 4 characters of token for verification
-  const token = CALENDLY_API_TOKEN || 'Not set';
-  const maskedToken = token.length > 8 
-    ? `${token.substring(0, 4)}...${token.substring(token.length - 4)}` 
-    : 'Token too short or not set';
-  
-  res.json({
-    tokenStatus: token ? 'Token is set' : 'Token is not set',
-    tokenLength: token ? token.length : 0,
-    maskedToken: maskedToken,
-    userUri: CALENDLY_USER_URI || 'Not set'
-  });
-});
-
-// Make sure to listen on the PORT provided by Railway
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
 });
