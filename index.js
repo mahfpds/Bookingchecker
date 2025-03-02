@@ -1,4 +1,4 @@
-// Replace your current check-availability endpoint with this one
+// Add this endpoint to your index.js file
 app.get('/check-availability', async (req, res) => {
   try {
     // Get the min_start_time from query parameters
@@ -11,92 +11,52 @@ app.get('/check-availability', async (req, res) => {
       });
     }
 
-    console.log(`Checking availability for time: ${minStartTime}`);
+    // Cal.com API endpoint for availability
+    const calApiKey = process.env.CAL_API_KEY;
+    const calEventTypeId = process.env.CAL_EVENT_TYPE_ID;
     
-    // Check if necessary environment variables are set
-    if (!CALENDLY_API_TOKEN) {
+    if (!calApiKey || !calEventTypeId) {
       return res.status(500).json({
         status: 'error',
-        message: 'Calendly API token is not configured'
+        message: 'Cal.com credentials not configured'
       });
     }
 
-    if (!CALENDLY_USER_URI) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'Calendly User URI is not configured'
-      });
-    }
-
-    // Calculate end time (7 days from start time)
+    // Calculate date range (current day to a week in the future)
     const startDate = new Date(minStartTime);
     const endDate = new Date(startDate);
     endDate.setDate(endDate.getDate() + 7);
-    const maxEndTime = endDate.toISOString();
-
-    // Get user availability from Calendly
-    console.log(`Requesting availability from ${minStartTime} to ${maxEndTime}`);
-    const availabilityResponse = await axios.get('https://api.calendly.com/user_availability', {
-      headers: {
-        'Authorization': `Bearer ${CALENDLY_API_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      params: {
-        'user': CALENDLY_USER_URI,
-        'start_time': minStartTime,
-        'end_time': maxEndTime
-      }
-    });
-
-    console.log('Retrieved user availability data');
-
-    // Check if the specific time is available
-    const requestedDate = new Date(minStartTime);
-    const requestHour = requestedDate.getUTCHours();
-    const requestMinute = requestedDate.getUTCMinutes();
-    const requestDay = requestedDate.toISOString().split('T')[0]; // Get YYYY-MM-DD
     
-    // Initialize variables
+    // Format dates as required by Cal.com API
+    const startDateStr = startDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    const endDateStr = endDate.toISOString().split('T')[0]; // YYYY-MM-DD
+
+    // Call Cal.com API
+    const availabilityResponse = await axios.get(
+      `https://api.cal.com/v1/availability/${calEventTypeId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${calApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        params: {
+          dateFrom: startDateStr,
+          dateTo: endDateStr,
+          withCredentials: true
+        }
+      }
+    );
+
+    // Check if the requested time is available
+    const requestedDateTime = new Date(minStartTime);
     let isAvailable = false;
-    let availableTimes = [];
     
-    // Process availability data from Calendly
-    if (availabilityResponse.data && 
-        availabilityResponse.data.resource) {
-      
-      // Calendly v2 API might return the data in different formats depending on the account type
-      // Let's handle both array and direct object formats
-      if (availabilityResponse.data.resource.available_times) {
-        // Direct available_times array
-        availableTimes = availabilityResponse.data.resource.available_times;
-      } else if (availabilityResponse.data.resource.availability_intervals) {
-        // Array of availability intervals
-        availabilityResponse.data.resource.availability_intervals.forEach(interval => {
-          // Convert intervals to discrete times (e.g., every 30 minutes)
-          const start = new Date(interval.start_time);
-          const end = new Date(interval.end_time);
-          
-          // Create 30-minute slots
-          while (start < end) {
-            availableTimes.push(new Date(start).toISOString());
-            start.setMinutes(start.getMinutes() + 30);
-          }
-        });
-      } else if (availabilityResponse.data.resource.availability_schedules) {
-        // Schedules with available_times
-        availabilityResponse.data.resource.availability_schedules.forEach(schedule => {
-          if (schedule.available_times) {
-            availableTimes = [...availableTimes, ...schedule.available_times];
-          }
-        });
-      }
-      
-      // Check if requested time matches an available time
-      isAvailable = availableTimes.some(timeSlot => {
-        const slotDate = new Date(timeSlot);
-        return slotDate.toISOString().split('T')[0] === requestDay && 
-               slotDate.getUTCHours() === requestHour && 
-               slotDate.getUTCMinutes() === requestMinute;
+    if (availabilityResponse.data && availabilityResponse.data.busy) {
+      // Cal.com returns busy times, so we need to check if our time conflicts with any
+      isAvailable = !availabilityResponse.data.busy.some(busySlot => {
+        const busyStart = new Date(busySlot.start);
+        const busyEnd = new Date(busySlot.end);
+        return requestedDateTime >= busyStart && requestedDateTime <= busyEnd;
       });
     }
 
@@ -104,30 +64,16 @@ app.get('/check-availability', async (req, res) => {
     return res.json({
       status: 'success',
       isAvailable: isAvailable,
-      requestedTime: minStartTime,
-      availableTimes: availableTimes.slice(0, 10) // Limit to first 10 available times
+      requestedTime: minStartTime
     });
 
   } catch (error) {
-    console.error('Error checking availability:');
+    console.error('Error checking availability:', error);
     
-    if (error.response) {
-      console.error('Response data:', JSON.stringify(error.response.data, null, 2));
-      console.error('Status code:', error.response.status);
-      
-      return res.status(error.response.status).json({
-        status: 'error',
-        message: error.response.data,
-        details: `Request failed with status code ${error.response.status}`
-      });
-    } else {
-      console.error('Error message:', error.message);
-      
-      return res.status(500).json({
-        status: 'error',
-        message: 'An error occurred while checking availability',
-        details: error.message
-      });
-    }
+    return res.status(500).json({
+      status: 'error',
+      message: 'An error occurred while checking availability',
+      details: error.message
+    });
   }
 });
