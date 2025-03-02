@@ -18,13 +18,10 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/check-availability', async (req, res) => {
   try {
     const { min_start_time, email } = req.query;
-    const date = min_start_time; // Support the parameter name in the request
     
-    if (!date) {
+    if (!min_start_time) {
       return res.status(400).json({ error: 'min_start_time parameter is required' });
     }
-    
-    // Rest of your code...
     
     // You would typically use your Calendly API token here
     const CALENDLY_API_TOKEN = process.env.CALENDLY_API_TOKEN;
@@ -33,13 +30,16 @@ app.get('/check-availability', async (req, res) => {
       return res.status(500).json({ error: 'Calendly API token not configured' });
     }
     
-    const response = await axios.get('https://api.calendly.com/availability', {
+    // Log request details for debugging
+    console.log(`Checking availability with min_start_time: ${min_start_time}`);
+    
+    const response = await axios.get('https://api.calendly.com/scheduling/availability', {
       headers: {
         'Authorization': `Bearer ${CALENDLY_API_TOKEN}`,
         'Content-Type': 'application/json'
       },
       params: {
-        date,
+        min_start_time,
         email
       }
     });
