@@ -17,11 +17,14 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 app.get('/check-availability', async (req, res) => {
   try {
-    const { date, email } = req.query;
+    const { min_start_time, email } = req.query;
+    const date = min_start_time; // Support the parameter name in the request
     
     if (!date) {
-      return res.status(400).json({ error: 'Date parameter is required' });
+      return res.status(400).json({ error: 'min_start_time parameter is required' });
     }
+    
+    // Rest of your code...
     
     // You would typically use your Calendly API token here
     const CALENDLY_API_TOKEN = process.env.CALENDLY_API_TOKEN;
