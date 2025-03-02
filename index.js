@@ -111,15 +111,31 @@ app.get('/check-availability', async (req, res) => {
     // For simplicity, we'll use the first event type
     const eventType = eventTypesResponse.data.collection[0];
     
-    // Get the available times for this event type
-    const availableTimesResponse = await axios.get(`https://api.calendly.com/event_types/${eventType.uri.split('/').pop()}/available_times`, {
+    // Get the available times using Calendly's scheduling_links endpoint
+    const schedulingLinkResponse = await axios.post('https://api.calendly.com/scheduling_links', {
+      max_event_count: 1,
+      owner: CALENDLY_USER_URI,
+      owner_type: 'users',
+      event_type: eventType.uri
+    }, {
+      headers: {
+        'Authorization': `Bearer ${CALENDLY_API_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    // Get the scheduling link
+    const schedulingLink = schedulingLinkResponse.data.resource;
+    console.log('Created scheduling link:', schedulingLink.url);
+
+    // Get available times from the scheduling link
+    const availableTimesResponse = await axios.get(`https://api.calendly.com/scheduling_links/${schedulingLink.token}/available_times`, {
       headers: {
         'Authorization': `Bearer ${CALENDLY_API_TOKEN}`,
         'Content-Type': 'application/json'
       },
       params: {
         'start_time': minStartTime,
-        // You can adjust the days_into_future parameter as needed
         'days': 7
       }
     });
