@@ -45,6 +45,43 @@ app.get('/get-user-uri', async (req, res) => {
   }
 });
 
+// Debug endpoint to get event types
+app.get('/debug-event-types', async (req, res) => {
+  try {
+    // Get the user's event types
+    const eventTypesResponse = await axios.get('https://api.calendly.com/event_types', {
+      headers: {
+        'Authorization': `Bearer ${CALENDLY_API_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      params: {
+        'user': CALENDLY_USER_URI
+      }
+    });
+
+    // Return the event types
+    return res.json({
+      status: 'success',
+      count: eventTypesResponse.data.collection.length,
+      eventTypes: eventTypesResponse.data.collection.map(et => ({
+        name: et.name,
+        uri: et.uri,
+        slug: et.slug,
+        kind: et.kind,
+        active: et.active
+      }))
+    });
+  } catch (error) {
+    console.error('Error getting event types:', error.response ? error.response.data : error.message);
+    
+    return res.status(error.response ? error.response.status : 500).json({
+      status: 'error',
+      message: error.response ? error.response.data : 'An error occurred while getting event types',
+      details: error.message
+    });
+  }
+});
+
 // Debug endpoint to check API token (remove in production)
 app.get('/debug-token', (req, res) => {
   // Show first and last 4 characters of token for verification
@@ -112,11 +149,14 @@ app.get('/check-availability', async (req, res) => {
     const eventType = eventTypesResponse.data.collection[0];
     
     // Get the available times using Calendly's scheduling_links endpoint
+    console.log('Event type URI:', eventType.uri);
+    
+    // Calendly expects the full URI for the event_type parameter
     const schedulingLinkResponse = await axios.post('https://api.calendly.com/scheduling_links', {
       max_event_count: 1,
       owner: CALENDLY_USER_URI,
       owner_type: 'users',
-      event_type: eventType.uri
+      event_type: eventType.uri // This is the full URI to the event type
     }, {
       headers: {
         'Authorization': `Bearer ${CALENDLY_API_TOKEN}`,
@@ -152,13 +192,37 @@ app.get('/check-availability', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error checking availability:', error.response ? error.response.data : error.message);
+    console.error('Error checking availability:');
     
-    return res.status(error.response ? error.response.status : 500).json({
-      status: 'error',
-      message: error.response ? error.response.data : 'An error occurred while checking availability',
-      details: error.message
-    });
+    if (error.response) {
+      console.error('Response data:', JSON.stringify(error.response.data, null, 2));
+      console.error('Status code:', error.response.status);
+      
+      // If it's an error with the event type, let's log event type details
+      if (error.response.data && 
+          error.response.data.message && 
+          error.response.data.message.details && 
+          error.response.data.message.details.some(d => d.parameter === 'event_type')) {
+        console.error('Invalid event_type. First event type from collection:', 
+                      eventTypesResponse.data.collection.length > 0 
+                        ? JSON.stringify(eventTypesResponse.data.collection[0], null, 2) 
+                        : 'No event types found');
+      }
+      
+      return res.status(error.response.status).json({
+        status: 'error',
+        message: error.response.data,
+        details: `Request failed with status code ${error.response.status}`
+      });
+    } else {
+      console.error('Error message:', error.message);
+      
+      return res.status(500).json({
+        status: 'error',
+        message: 'An error occurred while checking availability',
+        details: error.message
+      });
+    }
   }
 });
 
